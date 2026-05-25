@@ -95,8 +95,8 @@ while True:
             print(f"\nTHINK : {reasoning}", end="", flush=True)
 
         if not msg.tool_calls:
-            if reasoning and not msg.content:
-                print()
+            if reasoning:
+                print()  # 确保思考后换行
             break
 
         if reasoning:

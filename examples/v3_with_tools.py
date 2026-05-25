@@ -79,8 +79,7 @@ while True:
 
         # 模型不需要工具 → 退出循环，准备流式回答
         if not msg.tool_calls:
-            # 如果有思考但没有回答，先换行
-            if reasoning and not msg.content:
+            if reasoning:
                 print()
             break
 
