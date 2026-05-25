@@ -77,6 +77,8 @@ while True:
     messages.append({"role": "user", "content": user_input})
 
     # 循环处理工具调用
+    used_tools = False
+    final_msg = None  # 最后一次非流式响应（无工具调用时）
     while True:
         response = client.chat.completions.create(
             model=model,
@@ -88,31 +90,27 @@ while True:
         )
 
         msg = response.choices[0].message
-
-        # 显示思考过程
         reasoning = getattr(msg, "reasoning_content", None)
-        if reasoning:
-            print(f"\nTHINK : {reasoning}", end="", flush=True)
 
+        # 不需要工具 → 记下这条消息，退出循环
         if not msg.tool_calls:
-            if reasoning:
-                print()  # 确保思考后换行
+            final_msg = msg
             break
 
+        used_tools = True
+
+        # 显示思考过程
         if reasoning:
-            print()
+            print(f"\nTHINK : {reasoning}")
 
         # 执行所有工具调用
         tool_results = []
         for tool_call in msg.tool_calls:
             tool_name = tool_call.function.name
             tool_args = json.loads(tool_call.function.arguments)
-
-            print(f"\n🔧 调用工具: {tool_name}({tool_args})")
-
+            print(f"🔧 调用工具: {tool_name}({tool_args})")
             tool_func = TOOL_FUNCTIONS.get(tool_name)
             tool_result = tool_func(**tool_args) if tool_func else f"未知工具: {tool_name}"
-
             print(f"📊 工具返回: {tool_result}")
             tool_results.append((tool_call, tool_result))
 
@@ -122,7 +120,6 @@ while True:
             "content": msg.content,
             "tool_calls": msg.tool_calls
         }
-        reasoning = getattr(msg, "reasoning_content", None)
         if reasoning:
             assistant_msg["reasoning_content"] = reasoning
         messages.append(assistant_msg)
@@ -134,39 +131,50 @@ while True:
                 "content": tool_result
             })
 
-    # 流式输出最终回答
-    stream = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        stream=True,
-        reasoning_effort=model_config.get("reasoning_effort", "max"),
-        extra_body={"thinking": {"type": "enabled"}},
-    )
+    # 输出最终回答
+    if used_tools:
+        # 用过工具 → 流式输出（思考+回答一起展示）
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            reasoning_effort=model_config.get("reasoning_effort", "max"),
+            extra_body={"thinking": {"type": "enabled"}},
+        )
 
-    answer = ""
-    thinking_shown = False
-    for chunk in stream:
-        delta = chunk.choices[0].delta
+        answer = ""
+        thinking_shown = False
+        for chunk in stream:
+            delta = chunk.choices[0].delta
 
-        if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-            if not thinking_shown:
-                print("THINK : ", end="", flush=True)
-                thinking_shown = True
-            print(delta.reasoning_content, end="", flush=True)
+            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                if not thinking_shown:
+                    print("\nTHINK : ", end="", flush=True)
+                    thinking_shown = True
+                print(delta.reasoning_content, end="", flush=True)
 
-        if delta.content:
-            if thinking_shown:
-                print(f"\n\nOUT[{round_num}]: ", end="", flush=True)
-                thinking_shown = False
-            elif not answer:
-                print(f"OUT[{round_num}]: ", end="", flush=True)
-            print(delta.content, end="", flush=True)
-            answer += delta.content
+            if delta.content:
+                if thinking_shown:
+                    print(f"\n\nOUT[{round_num}]: ", end="", flush=True)
+                    thinking_shown = False
+                elif not answer:
+                    print(f"OUT[{round_num}]: ", end="", flush=True)
+                print(delta.content, end="", flush=True)
+                answer += delta.content
 
-    print()
+        print()
+        messages.append({"role": "assistant", "content": answer})
 
-    if not answer:
-        answer = "(模型未返回内容)"
+    else:
+        # 没用工具 → 直接用非流式结果（只想了1次）
+        reasoning = getattr(final_msg, "reasoning_content", None)
+        if reasoning:
+            print(f"\nTHINK : {reasoning}")
+        answer = final_msg.content or ""
+        print(f"OUT[{round_num}]: {answer}")
+        assistant_msg = {"role": "assistant", "content": answer}
+        if reasoning:
+            assistant_msg["reasoning_content"] = reasoning
+        messages.append(assistant_msg)
 
-    messages.append({"role": "assistant", "content": answer})
     round_num += 1
