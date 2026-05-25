@@ -17,7 +17,7 @@ if not model:
     raise ValueError("请在 .env 中设置 DEEPSEEK_MODEL")
 
 messages = [
-    {"role": "system", "content": "你是一个有用的AI助手。你可以使用工具来查询天气、计算数学、获取时间。其他问题直接回答。请用中文回复。"}
+    {"role": "system", "content": "你是一个有用的AI助手。你可以使用工具来计算数学、获取时间。其他问题直接回答。请用中文回复。"}
 ]
 
 HELP_TEXT = """
