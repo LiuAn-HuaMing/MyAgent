@@ -107,7 +107,7 @@ while True:
         # 正式回答
         if delta.content:
             if thinking_shown:
-                print(f"\n\nOUT[{round_num}]: ", end="", flush=True)
+                print(f"\nOUT[{round_num}]: ", end="", flush=True)
                 thinking_shown = False
             print(delta.content, end="", flush=True)
             answer += delta.content

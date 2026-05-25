@@ -3,9 +3,11 @@
 def calculator(expression: str) -> str:
     """计算数学表达式，返回结果字符串"""
     try:
-        # 只允许安全的数学运算
+        # 把 ^ 替换为 **（Python 的幂运算符号）
+        expression = expression.replace("^", "**")
         result = eval(expression, {"__builtins__": {}}, {})
-        return f"{expression} = {result}"
+        # 显示时还原 ^ 符号，更直观
+        return f"{expression.replace('**', '^')} = {result}"
     except Exception as e:
         return f"计算出错: {e}"
 
