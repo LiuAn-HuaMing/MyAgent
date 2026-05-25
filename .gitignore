@@ -1,0 +1,14 @@
+# 密钥文件（绝对不能提交！）
+.env
+
+# Python 虚拟环境
+.venv/
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+# 系统文件
+Thumbs.db
+.DS_Store
