@@ -198,14 +198,21 @@ while True:
 
         answer = ""
         thinking_shown = False
+        # XML 拦截缓冲区：模型可能把 tool call 当文本输出，实时屏蔽
+        xml_buf = ""       # 疑似 XML 区域的缓冲
+        in_xml = False     # 是否正在 XML 区域内
+
         for chunk in stream:
             delta = chunk.choices[0].delta
 
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                if not thinking_shown:
+                if thinking_shown:
+                    # 已在打印思考内容，直接继续
+                    print(delta.reasoning_content, end="", flush=True)
+                else:
                     print("\nTHINK : ", end="", flush=True)
                     thinking_shown = True
-                print(delta.reasoning_content, end="", flush=True)
+                    print(delta.reasoning_content, end="", flush=True)
 
             if delta.content:
                 if thinking_shown:
@@ -213,8 +220,52 @@ while True:
                     thinking_shown = False
                 elif not answer:
                     print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}", end="", flush=True)
-                print(delta.content, end="", flush=True)
-                answer += delta.content
+
+                text = delta.content
+                i = 0
+                while i < len(text):
+                    if not in_xml:
+                        # 正常模式：检测 XML 起始
+                        idx_func = text.find("<function_calls>", i)
+                        idx_invoke = text.find("<invoke", i)
+                        first_xml = min(idx_func if idx_func >= 0 else len(text),
+                                        idx_invoke if idx_invoke >= 0 else len(text))
+
+                        if first_xml < len(text):
+                            # 先输出 XML 之前的正常文字
+                            print(text[i:first_xml], end="", flush=True)
+                            answer += text[i:first_xml]
+                            in_xml = True
+                            xml_buf = text[first_xml:]
+                            i = len(text)  # 当前 chunk 剩余全进缓冲
+                        else:
+                            print(text[i:], end="", flush=True)
+                            answer += text[i:]
+                            i = len(text)
+                    else:
+                        # XML 模式：缓冲直到找到闭合标签
+                        xml_buf += text[i:]
+                        i = len(text)
+                        # 检查是否 XML 结束了
+                        if "</function_calls>" in xml_buf or "</invoke>" in xml_buf:
+                            # XML 块结束，丢弃缓冲
+                            end_tag = max(xml_buf.find("</function_calls>"),
+                                          xml_buf.find("</invoke>"))
+                            if end_tag >= 0:
+                                end_pos = end_tag + len("</function_calls>") if "</function_calls>" in xml_buf else end_tag + len("</invoke>")
+                                # 检查闭合标签后还有没有正常文字
+                                after = xml_buf[end_pos:]
+                                xml_buf = ""
+                                in_xml = False
+                                if after:
+                                    # 重新处理剩余部分
+                                    text = after
+                                    i = 0
+                                    continue
+
+        # 如果循环结束时还在 XML 里，丢弃缓冲
+        if xml_buf and not in_xml:
+            answer += _clean_response(xml_buf)
 
         print()
         answer = _clean_response(answer)
