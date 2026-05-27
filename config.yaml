@@ -1,17 +1,17 @@
 # Agent 配置文件 —— 修改这里即可改变 Agent 行为，无需改代码
 
-system_prompt: "你是一个有用的AI助手。你可以使用工具来：计算数学、获取时间、读写文件、联网搜索、执行命令行指令。使用 run_command 工具时，必须在 explanation 参数中用中文清晰说明该命令会做什么。对于需要最新信息的问题，请使用 web_search。其他问题直接回答。请用中文回复。"
+system_prompt: "你是一个有用的AI助手。你可以使用工具来：获取时间、读写文件、联网搜索、执行命令行指令、运行Python代码。数学计算请用 run_python。使用 run_command 时必须在 explanation 中说明命令做什么。对于需要最新信息的问题请用 web_search。其他问题直接回答。请用中文回复。"
 
 model:
   reasoning_effort: "max"    # low / medium / max
 
 tools:
-  calculator: true
   get_current_time: true
   read_file: true
   write_file: true
   web_search: true
   run_command: true
+  run_python: true
 
 # 文件工具的安全工作目录（文件操作仅限此目录内）
 workspace_dir: "C:/Programming/MyAgent/workspace"
