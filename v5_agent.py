@@ -108,8 +108,13 @@ print("=" * 45)
 # 对话循环
 # ============================================================
 round_num = 1
+skip_input = False  # XML 工具执行后跳过 input，直接处理工具结果
 while True:
-    user_input = input(f"\n{Fore.GREEN}IN [{round_num}]: {Style.RESET_ALL}")
+    if not skip_input:
+        user_input = input(f"\n{Fore.GREEN}IN [{round_num}]: {Style.RESET_ALL}")
+    else:
+        user_input = None
+    skip_input = False
 
     if user_input.startswith("/"):
         cmd = user_input[1:].lower()
@@ -299,95 +304,41 @@ while True:
         print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}{_clean_response(answer)}")
 
     # ========================================
-    # 检测并执行模型中 XML 输出的工具调用
+    # 检测并执行模型 XML 输出的工具调用
     # ========================================
     clean_answer, xml_tool_calls = _extract_xml_tool_calls(raw_answer)
 
     if xml_tool_calls:
-        # 构建 assistant 消息（含清洗后文本 + 正规 tool_calls）
-        formatted_calls = []
+        import uuid
+        # 保存清洗后的回答
+        messages.append({"role": "assistant", "content": clean_answer or None})
+        # 执行 XML 工具
         for t_name, t_args in xml_tool_calls:
-            # 生成一个伪 tool_call_id
-            import uuid
-            call_id = f"xml_{uuid.uuid4().hex[:8]}"
-            formatted_calls.append({
-                "id": call_id,
-                "type": "function",
-                "function": {"name": t_name, "arguments": json.dumps(t_args, ensure_ascii=False)}
-            })
-
-        assistant_msg = {
-            "role": "assistant",
-            "content": clean_answer or None,
-            "tool_calls": formatted_calls
-        }
-        messages.append(assistant_msg)
-
-        # 执行工具并加入结果
-        for (t_name, t_args), fc in zip(xml_tool_calls, formatted_calls):
-            tool_func = TOOL_FUNCTIONS.get(t_name)
-            result = tool_func(**t_args) if tool_func else f"未知工具: {t_name}"
+            func = TOOL_FUNCTIONS.get(t_name)
+            result = func(**t_args) if func else f"未知工具: {t_name}"
             print(f"🔧 XML工具: {t_name}({t_args}) → {result}")
+            # 构造正规 tool_call 格式加入历史
+            cid = f"xml_{uuid.uuid4().hex[:8]}"
             messages.append({
-                "role": "tool",
-                "tool_call_id": fc["id"],
-                "content": result
+                "role": "assistant", "content": None,
+                "tool_calls": [{"id": cid, "type": "function",
+                                "function": {"name": t_name,
+                                             "arguments": json.dumps(t_args, ensure_ascii=False)}}]
             })
+            messages.append({"role": "tool", "tool_call_id": cid, "content": result})
+        # 重新进入处理循环（跳过 input，直接处理工具结果）
+        skip_input = True
+        continue
 
-        # 继续让模型处理工具结果
-        used_tools = True  # 触发下面流式输出
-        final_msg = None
-
-        # 非流式检查：模型拿到工具结果后还要不要继续调工具
-        while True:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=TOOL_DESCRIPTIONS,
-                stream=False,
-                reasoning_effort=model_config.get("reasoning_effort", "max"),
-                extra_body={"thinking": {"type": "enabled"}},
-            )
-            msg = response.choices[0].message
-            reasoning2 = getattr(msg, "reasoning_content", None)
-            if not msg.tool_calls:
-                final_msg = msg
-                break
-            if reasoning2:
-                print(f"\nTHINK : {reasoning2}")
-            for tc in msg.tool_calls:
-                t_name = tc.function.name
-                t_args = json.loads(tc.function.arguments)
-                print(f"🔧 调用工具: {t_name}({t_args})")
-                func = TOOL_FUNCTIONS.get(t_name)
-                res = func(**t_args) if func else f"未知工具: {t_name}"
-                print(f"📊 工具返回: {res}")
-                msg_dict = {"role": "assistant", "content": msg.content, "tool_calls": msg.tool_calls}
-                if reasoning2:
-                    msg_dict["reasoning_content"] = reasoning2
-                messages.append(msg_dict)
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": res})
-
-        # 流式输出最终答案
-        if final_msg:
-            reasoning2 = getattr(final_msg, "reasoning_content", None)
-            if reasoning2:
-                print(f"\nTHINK : {reasoning2}")
-            final_answer = _clean_response(final_msg.content or "")
-            print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}{final_answer}")
-            am = {"role": "assistant", "content": final_answer}
-            if reasoning2:
-                am["reasoning_content"] = reasoning2
-            messages.append(am)
-    else:
-        # 无 XML 工具调用，正常处理
-        answer = _clean_response(answer)
-        assistant_msg = {"role": "assistant", "content": answer}
-        # 如果用了正规工具，reasoning 已在上面处理；非工具路径需保留 reasoning
-        if not used_tools:
-            reasoning = getattr(final_msg, "reasoning_content", None)
-            if reasoning:
-                assistant_msg["reasoning_content"] = reasoning
-        messages.append(assistant_msg)
+    # ========================================
+    # 正常：保存回答到历史
+    # ========================================
+    answer = _clean_response(answer)
+    assistant_msg = {"role": "assistant", "content": answer}
+    if not used_tools:
+        reasoning = getattr(final_msg, "reasoning_content", None)
+        if reasoning:
+            assistant_msg["reasoning_content"] = reasoning
+    messages.append(assistant_msg)
 
     round_num += 1
