@@ -1,7 +1,7 @@
 """工具注册中心 —— 统一管理所有工具，支持通过 config.yaml 开关"""
 import yaml
 import os
-from tools import calculator, time_tool, file_reader, file_writer, web_search
+from tools import calculator, time_tool, file_reader, file_writer, web_search, shell_tool
 
 # 所有可用工具的定义
 ALL_TOOLS = {
@@ -10,6 +10,7 @@ ALL_TOOLS = {
     "read_file":        (file_reader.read_file,       file_reader.DESCRIPTION),
     "write_file":       (file_writer.write_file,      file_writer.DESCRIPTION),
     "web_search":       (web_search.web_search,       web_search.DESCRIPTION),
+    "run_command":      (shell_tool.run_command,      shell_tool.DESCRIPTION),
 }
 
 # 从 config.yaml 读取启用的工具
