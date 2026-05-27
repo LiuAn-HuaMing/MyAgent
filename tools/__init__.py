@@ -1,14 +1,15 @@
 """工具注册中心 —— 统一管理所有工具，支持通过 config.yaml 开关"""
 import yaml
 import os
-from tools import calculator, time_tool, file_reader, file_writer
+from tools import calculator, time_tool, file_reader, file_writer, web_search
 
 # 所有可用工具的定义
 ALL_TOOLS = {
-    "calculator":      (calculator.calculator,      calculator.DESCRIPTION),
-    "get_current_time": (time_tool.get_current_time, time_tool.DESCRIPTION),
-    "read_file":       (file_reader.read_file,      file_reader.DESCRIPTION),
-    "write_file":      (file_writer.write_file,     file_writer.DESCRIPTION),
+    "calculator":       (calculator.calculator,       calculator.DESCRIPTION),
+    "get_current_time": (time_tool.get_current_time,  time_tool.DESCRIPTION),
+    "read_file":        (file_reader.read_file,       file_reader.DESCRIPTION),
+    "write_file":       (file_writer.write_file,      file_writer.DESCRIPTION),
+    "web_search":       (web_search.web_search,       web_search.DESCRIPTION),
 }
 
 # 从 config.yaml 读取启用的工具
