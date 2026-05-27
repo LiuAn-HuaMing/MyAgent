@@ -1,5 +1,6 @@
 """V5: 记忆系统 —— Agent 能记住你，跨会话持久化"""
 import os
+import re
 import json
 import yaml
 from openai import OpenAI
@@ -11,6 +12,22 @@ from colorama import init, Fore, Style
 init(autoreset=True)
 
 load_dotenv()
+
+
+# ============================================================
+# 工具函数：清洗模型误输出的 XML 格式工具调用
+# ============================================================
+def _clean_response(text: str) -> str:
+    """去掉模型误当文本输出的 <function_calls> / <invoke> 等 XML"""
+    if not text:
+        return text
+    # 匹配 <function_calls>...</function_calls> 整块
+    text = re.sub(r'<function_calls>.*?</function_calls>', '', text, flags=re.DOTALL)
+    # 匹配 <invoke name="...">...</invoke>
+    text = re.sub(r'<invoke\b[^>]*>.*?</invoke>', '', text, flags=re.DOTALL)
+    # 匹配零散的 parameter 标签
+    text = re.sub(r'<parameter\b[^>]*>.*?</parameter>', '', text, flags=re.DOTALL)
+    return text.strip()
 
 # ============================================================
 # 配置加载
@@ -200,13 +217,14 @@ while True:
                 answer += delta.content
 
         print()
+        answer = _clean_response(answer)
         messages.append({"role": "assistant", "content": answer})
 
     else:
         reasoning = getattr(final_msg, "reasoning_content", None)
         if reasoning:
             print(f"\nTHINK : {reasoning}")
-        answer = final_msg.content or ""
+        answer = _clean_response(final_msg.content or "")
         print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}{answer}")
         assistant_msg = {"role": "assistant", "content": answer}
         if reasoning:
