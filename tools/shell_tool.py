@@ -36,7 +36,7 @@ def run_command(command: str, explanation: str) -> str:
     print(f"💻 命令 : {command}")
     print(f"📝 说明 : {explanation}")
     print(f"{'=' * 50}")
-    print("⚠️  输入 [确认] 来执行，输入其他任意内容则跳过")
+    print("⚠️  输入 [confirm] 来执行，输入其他任意内容则跳过")
 
     # ============================================
     # 第 2 步：等待用户输入
@@ -46,8 +46,8 @@ def run_command(command: str, explanation: str) -> str:
     except (EOFError, KeyboardInterrupt):
         return "❌ 已取消"
 
-    if confirm != "确认":
-        return f"⏭️ 已跳过: 用户输入了 '{confirm}' 而非 '确认'"
+    if confirm.lower() != "confirm":
+        return f"⏭️ 已跳过: 用户输入了 '{confirm}' 而非 'confirm'"
 
     # ============================================
     # 第 3 步：执行命令

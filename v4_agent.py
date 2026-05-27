@@ -5,6 +5,9 @@ import yaml
 from openai import OpenAI
 from dotenv import load_dotenv
 from tools import TOOL_FUNCTIONS, TOOL_DESCRIPTIONS
+from colorama import init, Fore, Style
+
+init(autoreset=True)  # 每次 print 后自动重置颜色
 
 load_dotenv()
 
@@ -43,7 +46,7 @@ HELP_TEXT = """
 """
 
 print("=" * 40)
-print("🤖 Agent V4（计算器 | 时间 | 文件读写）")
+print("🤖 Agent V4（计算器 | 时间 | 文件读写 | 搜索 | 命令行）")
 print(f"📁 工作目录: {workspace_dir}")
 print("=" * 40)
 
@@ -52,7 +55,7 @@ print("=" * 40)
 # ============================================================
 round_num = 1
 while True:
-    user_input = input(f"\nIN [{round_num}]: ")
+    user_input = input(f"\n{Fore.GREEN}IN [{round_num}]: {Style.RESET_ALL}")
 
     if user_input.startswith("/"):
         cmd = user_input[1:].lower()
@@ -155,10 +158,10 @@ while True:
 
             if delta.content:
                 if thinking_shown:
-                    print(f"\n\nOUT[{round_num}]: ", end="", flush=True)
+                    print(f"\n\n{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}", end="", flush=True)
                     thinking_shown = False
                 elif not answer:
-                    print(f"OUT[{round_num}]: ", end="", flush=True)
+                    print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}", end="", flush=True)
                 print(delta.content, end="", flush=True)
                 answer += delta.content
 
@@ -171,7 +174,7 @@ while True:
         if reasoning:
             print(f"\nTHINK : {reasoning}")
         answer = final_msg.content or ""
-        print(f"OUT[{round_num}]: {answer}")
+        print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}{answer}")
         assistant_msg = {"role": "assistant", "content": answer}
         if reasoning:
             assistant_msg["reasoning_content"] = reasoning
