@@ -15,19 +15,45 @@ load_dotenv()
 
 
 # ============================================================
-# 工具函数：清洗模型误输出的 XML 格式工具调用
+# 工具函数：检测并解析模型误输出的 XML 工具调用
 # ============================================================
-def _clean_response(text: str) -> str:
-    """去掉模型误当文本输出的 <function_calls> / <invoke> 等 XML"""
+def _extract_xml_tool_calls(text: str) -> tuple[str, list]:
+    """
+    从文本中提取 XML 格式的工具调用，返回 (清洗后文本, 工具调用列表)
+    工具调用列表每项为 (tool_name, dict_of_args)
+    """
     if not text:
-        return text
-    # 匹配 <function_calls>...</function_calls> 整块
-    text = re.sub(r'<function_calls>.*?</function_calls>', '', text, flags=re.DOTALL)
-    # 匹配 <invoke name="...">...</invoke>
-    text = re.sub(r'<invoke\b[^>]*>.*?</invoke>', '', text, flags=re.DOTALL)
-    # 匹配零散的 parameter 标签
-    text = re.sub(r'<parameter\b[^>]*>.*?</parameter>', '', text, flags=re.DOTALL)
-    return text.strip()
+        return text, []
+
+    tool_calls = []
+    # 匹配所有 <invoke name="xxx">...</invoke> 块
+    invoke_pattern = r'<invoke\s+name="([^"]+)"\s*>(.*?)</invoke>'
+    for match in re.finditer(invoke_pattern, text, re.DOTALL):
+        tool_name = match.group(1)
+        params_block = match.group(2)
+
+        args = {}
+        # 匹配 <parameter name="xxx" ...>value</parameter>
+        param_pattern = r'<parameter\s+name="([^"]+)"[^>]*>(.*?)</parameter>'
+        for pm in re.finditer(param_pattern, params_block, re.DOTALL):
+            args[pm.group(1)] = pm.group(2)
+
+        if tool_name and args:
+            tool_calls.append((tool_name, args))
+
+    # 清洗掉所有 XML 标签
+    clean = re.sub(r'<function_calls>.*?</function_calls>', '', text, flags=re.DOTALL)
+    clean = re.sub(r'<invoke\b[^>]*>.*?</invoke>', '', clean, flags=re.DOTALL)
+    clean = re.sub(r'<parameter\b[^>]*>.*?</parameter>', '', clean, flags=re.DOTALL)
+    clean = clean.strip()
+
+    return clean, tool_calls
+
+
+def _clean_response(text: str) -> str:
+    """仅清洗 XML，不解析（兼容旧逻辑）"""
+    clean, _ = _extract_xml_tool_calls(text)
+    return clean
 
 # ============================================================
 # 配置加载
@@ -187,6 +213,9 @@ while True:
     # ========================================
     # 输出最终回答
     # ========================================
+    # 保存原始答案，以便后续提取 XML 工具调用
+    raw_answer = ""
+
     if used_tools:
         stream = client.chat.completions.create(
             model=model,
@@ -198,16 +227,14 @@ while True:
 
         answer = ""
         thinking_shown = False
-        # XML 拦截缓冲区：模型可能把 tool call 当文本输出，实时屏蔽
-        xml_buf = ""       # 疑似 XML 区域的缓冲
-        in_xml = False     # 是否正在 XML 区域内
+        xml_buf = ""
+        in_xml = False
 
         for chunk in stream:
             delta = chunk.choices[0].delta
 
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
                 if thinking_shown:
-                    # 已在打印思考内容，直接继续
                     print(delta.reasoning_content, end="", flush=True)
                 else:
                     print("\nTHINK : ", end="", flush=True)
@@ -215,6 +242,8 @@ while True:
                     print(delta.reasoning_content, end="", flush=True)
 
             if delta.content:
+                raw_answer += delta.content  # 保存原始内容（含 XML）
+
                 if thinking_shown:
                     print(f"\n\n{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}", end="", flush=True)
                     thinking_shown = False
@@ -225,61 +254,140 @@ while True:
                 i = 0
                 while i < len(text):
                     if not in_xml:
-                        # 正常模式：检测 XML 起始
                         idx_func = text.find("<function_calls>", i)
                         idx_invoke = text.find("<invoke", i)
                         first_xml = min(idx_func if idx_func >= 0 else len(text),
                                         idx_invoke if idx_invoke >= 0 else len(text))
 
                         if first_xml < len(text):
-                            # 先输出 XML 之前的正常文字
                             print(text[i:first_xml], end="", flush=True)
                             answer += text[i:first_xml]
                             in_xml = True
                             xml_buf = text[first_xml:]
-                            i = len(text)  # 当前 chunk 剩余全进缓冲
+                            i = len(text)
                         else:
                             print(text[i:], end="", flush=True)
                             answer += text[i:]
                             i = len(text)
                     else:
-                        # XML 模式：缓冲直到找到闭合标签
                         xml_buf += text[i:]
                         i = len(text)
-                        # 检查是否 XML 结束了
                         if "</function_calls>" in xml_buf or "</invoke>" in xml_buf:
-                            # XML 块结束，丢弃缓冲
                             end_tag = max(xml_buf.find("</function_calls>"),
                                           xml_buf.find("</invoke>"))
                             if end_tag >= 0:
-                                end_pos = end_tag + len("</function_calls>") if "</function_calls>" in xml_buf else end_tag + len("</invoke>")
-                                # 检查闭合标签后还有没有正常文字
+                                end_pos = end_tag + (len("</function_calls>") if "</function_calls>" in xml_buf else len("</invoke>"))
                                 after = xml_buf[end_pos:]
                                 xml_buf = ""
                                 in_xml = False
                                 if after:
-                                    # 重新处理剩余部分
                                     text = after
                                     i = 0
                                     continue
 
-        # 如果循环结束时还在 XML 里，丢弃缓冲
         if xml_buf and not in_xml:
             answer += _clean_response(xml_buf)
 
         print()
-        answer = _clean_response(answer)
-        messages.append({"role": "assistant", "content": answer})
 
     else:
         reasoning = getattr(final_msg, "reasoning_content", None)
         if reasoning:
             print(f"\nTHINK : {reasoning}")
-        answer = _clean_response(final_msg.content or "")
-        print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}{answer}")
+        raw_answer = final_msg.content or ""
+        answer = raw_answer
+        print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}{_clean_response(answer)}")
+
+    # ========================================
+    # 检测并执行模型中 XML 输出的工具调用
+    # ========================================
+    clean_answer, xml_tool_calls = _extract_xml_tool_calls(raw_answer)
+
+    if xml_tool_calls:
+        # 构建 assistant 消息（含清洗后文本 + 正规 tool_calls）
+        formatted_calls = []
+        for t_name, t_args in xml_tool_calls:
+            # 生成一个伪 tool_call_id
+            import uuid
+            call_id = f"xml_{uuid.uuid4().hex[:8]}"
+            formatted_calls.append({
+                "id": call_id,
+                "type": "function",
+                "function": {"name": t_name, "arguments": json.dumps(t_args, ensure_ascii=False)}
+            })
+
+        assistant_msg = {
+            "role": "assistant",
+            "content": clean_answer or None,
+            "tool_calls": formatted_calls
+        }
+        messages.append(assistant_msg)
+
+        # 执行工具并加入结果
+        for (t_name, t_args), fc in zip(xml_tool_calls, formatted_calls):
+            tool_func = TOOL_FUNCTIONS.get(t_name)
+            result = tool_func(**t_args) if tool_func else f"未知工具: {t_name}"
+            print(f"🔧 XML工具: {t_name}({t_args}) → {result}")
+            messages.append({
+                "role": "tool",
+                "tool_call_id": fc["id"],
+                "content": result
+            })
+
+        # 继续让模型处理工具结果
+        used_tools = True  # 触发下面流式输出
+        final_msg = None
+
+        # 非流式检查：模型拿到工具结果后还要不要继续调工具
+        while True:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=TOOL_DESCRIPTIONS,
+                stream=False,
+                reasoning_effort=model_config.get("reasoning_effort", "max"),
+                extra_body={"thinking": {"type": "enabled"}},
+            )
+            msg = response.choices[0].message
+            reasoning2 = getattr(msg, "reasoning_content", None)
+            if not msg.tool_calls:
+                final_msg = msg
+                break
+            if reasoning2:
+                print(f"\nTHINK : {reasoning2}")
+            for tc in msg.tool_calls:
+                t_name = tc.function.name
+                t_args = json.loads(tc.function.arguments)
+                print(f"🔧 调用工具: {t_name}({t_args})")
+                func = TOOL_FUNCTIONS.get(t_name)
+                res = func(**t_args) if func else f"未知工具: {t_name}"
+                print(f"📊 工具返回: {res}")
+                msg_dict = {"role": "assistant", "content": msg.content, "tool_calls": msg.tool_calls}
+                if reasoning2:
+                    msg_dict["reasoning_content"] = reasoning2
+                messages.append(msg_dict)
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": res})
+
+        # 流式输出最终答案
+        if final_msg:
+            reasoning2 = getattr(final_msg, "reasoning_content", None)
+            if reasoning2:
+                print(f"\nTHINK : {reasoning2}")
+            final_answer = _clean_response(final_msg.content or "")
+            print(f"{Fore.RED}OUT[{round_num}]: {Style.RESET_ALL}{final_answer}")
+            am = {"role": "assistant", "content": final_answer}
+            if reasoning2:
+                am["reasoning_content"] = reasoning2
+            messages.append(am)
+    else:
+        # 无 XML 工具调用，正常处理
+        answer = _clean_response(answer)
         assistant_msg = {"role": "assistant", "content": answer}
-        if reasoning:
-            assistant_msg["reasoning_content"] = reasoning
+        # 如果用了正规工具，reasoning 已在上面处理；非工具路径需保留 reasoning
+        if not used_tools:
+            reasoning = getattr(final_msg, "reasoning_content", None)
+            if reasoning:
+                assistant_msg["reasoning_content"] = reasoning
         messages.append(assistant_msg)
 
     round_num += 1
