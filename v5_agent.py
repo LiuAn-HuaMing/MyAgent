@@ -89,12 +89,12 @@ messages = [{"role": "system", "content": system_prompt}]
 
 HELP_TEXT = """
 命令列表：
-  /help      显示此帮助信息
-  /exit      退出程序
-  /clear     清空对话历史（记忆保留）
-  /remember <主题>: <内容>   手动保存记忆
-  /forget <主题>             删除记忆
-  /memories  查看所有记忆
+  /help                       显示此帮助信息
+  /exit                       退出程序
+  /clear                      清空对话历史（记忆保留）
+  /remember <主题>: <内容>     手动保存记忆
+  /forget <主题>               删除记忆
+  /memories                   查看所有记忆
 """
 
 print("=" * 45)
@@ -116,9 +116,13 @@ while True:
         user_input = None
     skip_input = False
 
-    if user_input.startswith("/"):
+    if user_input and user_input.startswith("/"):
         cmd = user_input[1:].lower()
         parts = cmd.split(None, 1)
+        # 只有 / 没有命令名 → 报错
+        if not parts or not parts[0]:
+            print("输入 /help 查看可用命令")
+            continue
 
         if parts[0] in ["exit", "quit"]:
             print("👋 再见！记忆已保存。")
