@@ -1,7 +1,7 @@
 """工具注册中心 —— 统一管理所有工具，支持通过 config.yaml 开关"""
 import yaml
 import os
-from tools import time_tool, weather_tool, file_reader, file_writer, web_search, web_reader, shell_tool, python_runner
+from tools import time_tool, weather_tool, file_reader, file_writer, web_search, web_reader, shell_tool, python_runner, memory_tool
 
 # 所有可用工具的定义
 ALL_TOOLS = {
@@ -13,6 +13,9 @@ ALL_TOOLS = {
     "read_webpage":     (web_reader.read_webpage,     web_reader.DESCRIPTION),
     "run_command":      (shell_tool.run_command,      shell_tool.DESCRIPTION),
     "run_python":       (python_runner.run_python,    python_runner.DESCRIPTION),
+    "save_memory":      (memory_tool.save_memory,     memory_tool.SAVE_DESCRIPTION),
+    "list_memories":    (memory_tool.list_memories,   memory_tool.LIST_DESCRIPTION),
+    "delete_memory":    (memory_tool.delete_memory,   memory_tool.DELETE_DESCRIPTION),
 }
 
 # 从 config.yaml 读取启用的工具
