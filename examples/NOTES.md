@@ -99,13 +99,22 @@
 - 自动记忆：Agent 在对话中学到重要信息时主动保存
 - `/clear` 只清对话历史，不删记忆
 
+**踩过的坑：**
+- **XML 工具调用幻觉**：模型有时不按 JSON Schema 调工具，而是在文本中输出 `<function_calls><invoke name="...">` 等 XML 标签。这是训练数据中混入了其他 Agent 框架的对话格式导致的
+- **解决方案**：流式输出时用状态机实时拦截 XML 标签（不打印），输出后用正则提取并执行工具，通过 `processing_tools` 标志重回工具处理循环
+- **reasoning_content 400 错误**：DeepSeek 要求思考内容必须原样传回，否则下次 API 调用报 400。因为服务端按完整消息序列做 KV-cache，缺了 reasoning_content 无法命中缓存
+- **XML 工具后模型无法处理结果**：早期 `skip_input` 机制会被 `if not user_input: continue` 挡住，模型永远看不到工具执行结果。改为 `processing_tools` 标志穿透守卫
+- **身份幻觉**：模型有时自称 Claude/ChatGPT。因为 DeepSeek 训练数据含大量其他 AI 对话，system prompt 未声明身份时会随机抽取训练数据中的名字
+
 **学到的东西：**
 - 记忆 ≠ 对话历史。记忆是跨会话的，对话历史是本次的
 - system prompt 注入是让 Agent "知道"记忆的最简单方式
 - Agent 判断"该不该记"需要 system prompt 约束（不记琐碎测试）
 - JSON 文件作轻量级数据库够用
+- LLM 的 tool_calls 不一定走正规通道，必须有容错方案（XML 解析）
+- 流式输出的 XML 拦截需要状态机，简单的字符串匹配不够
 
-**核心代码量：** ~190 行
+**核心代码量：** ~350 行
 
 ---
 
@@ -122,7 +131,8 @@ MyAgent/                      MyAgent/
 │   ├── v2_loop_chat.py       │   ├── v2_loop_chat.py
 │   ├── v3_with_tools.py      │   ├── v3_with_tools.py
 │   ├── v4_agent.py           │   └── v4_agent.py
-│   └── NOTES.md              │   └── NOTES.md
+│   └── NOTES.md              │   ├── v5_agent.py       🆕
+                              │   └── NOTES.md
 ├── tools/                    ├── tools/
 │   ├── __init__.py           │   ├── __init__.py
 │   ├── time_tool.py          │   ├── time_tool.py
@@ -164,4 +174,5 @@ MyAgent/                      MyAgent/
 | **命令安全** | 展示 + 说明 + `confirm` 确认 | V4 |
 | **代码执行** | 子进程沙箱 + 15s 超时 | V4 |
 | **跨会话记忆** | JSON 文件 + system prompt 注入 | V5 |
+| **XML 容错** | 流式拦截 + 正则提取 + 自动执行 | V5 |
 | **安全** | `.env` 存密钥，`.gitignore` 防泄露 | V1 |
