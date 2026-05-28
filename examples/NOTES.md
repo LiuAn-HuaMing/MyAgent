@@ -118,34 +118,83 @@
 
 ---
 
+## V6：多会话管理 + 对话压缩 (`v6_agent.py`)  🆕
+
+**目标：** 每次会话独立存档，长对话自动压缩节省 tokens。
+
+**V5 → V6 关键改动：**
+
+### 会话管理
+- **独立存档**：每个会话存为 `conversations/<id>.json`，不再全量合并历史
+- **启动新会话**：不再自动加载旧对话，从空白开始
+- `sessions.json` 清单：记录各会话的 ID、标题、轮数、时间
+- 会话命令：`/new [标题]`、`/sessions`、`/load <ID>`、`/delete <ID>`、`/clearall confirm`
+- `/save [标题]` 支持可选标题，`/title <标题>` 手动改名
+- **自动标题**：首条消息自动取前 30 字符为标题
+
+### 对话压缩
+- 保存时检测用户+助手消息是否超过阈值（默认 30 条）
+- 超过则取最旧消息调用 LLM 生成摘要，保留最近 12 条原文
+- 压缩后存档格式：`{"summary": "摘要...", "messages": [最近消息]}`
+- 加载时摘要注入 system prompt，提示"请基于以上摘要继续"
+- 兼容旧格式（纯列表），无需迁移
+- 已压缩会话在 `/sessions` 中标记 📦
+
+### 其他改进
+- `/history [N]` 查看当前会话历史，可限定最近 N 轮
+- `/clear` 只清空当前会话，保留存档
+- 修复 `round_num` 不递增的计数 bug
+- `.gitignore` 增加 `workspace/conversations/` 和 `workspace/memory.json`
+
+**踩过的坑：**
+- **全量合并坏处大**：V5 启动时合并所有历史，对话越长越慢、越贵。改为独立存档 + 按需加载
+- **压缩要保留 tool 消息**：只压缩 user/assistant 消息，tool 调用和结果必须随最近消息完整保留，否则 loaded 对话无法继续
+- **分界点用倒序查找**：压缩时从后往前数 `keep_recent` 条 user/assistant，找到精确的分界索引。正序匹配内容容易出错（重复消息）
+- **round_num 计数**：重构时要注意 XML 工具路径的 `continue` 不触发递增，只有正常完成路径才 `+= 1`
+- **老存档兼容**：`load_session_messages` 返回 `(summary, messages)` 元组，但旧格式是纯列表，需要类型判断
+
+**学到的东西：**
+- 会话 = 独立文件 + 清单索引，比单文件堆叠更灵活
+- 确认删除用 `confirm` 参数而非二次确认对话框，CLI 更流畅
+- LLM 做对话摘要效果很好，500 字能保留关键决策
+- 摘要注入 system prompt 时加"不要重复已完成的工作"提示很重要
+- 自动标题让 `/sessions` 列表更可读，是低成本高收益的功能
+
+**核心代码量：** ~590 行
+
+---
+
 ## 项目结构演进
 
 ```
-V4:                           V5:
+V5:                           V6:
 MyAgent/                      MyAgent/
 ├── .env                      ├── .env
 ├── config.yaml               ├── config.yaml
-├── v4_agent.py  (→examples)  ├── v5_agent.py        ← 当前主文件
+├── v5_agent.py  (→examples)  ├── v6_agent.py        ← 当前主文件
 ├── examples/                 ├── examples/
 │   ├── v1_single_chat.py     │   ├── v1_single_chat.py
 │   ├── v2_loop_chat.py       │   ├── v2_loop_chat.py
 │   ├── v3_with_tools.py      │   ├── v3_with_tools.py
-│   ├── v4_agent.py           │   └── v4_agent.py
-│   └── NOTES.md              │   ├── v5_agent.py       🆕
-                              │   └── NOTES.md
-├── tools/                    ├── tools/
-│   ├── __init__.py           │   ├── __init__.py
-│   ├── time_tool.py          │   ├── time_tool.py
+│   ├── v4_agent.py           │   ├── v4_agent.py
+│   └── NOTES.md              │   ├── v5_agent.py
+├── tools/                    │   └── NOTES.md
+│   ├── __init__.py           ├── tools/
+│   ├── time_tool.py          │   ├── __init__.py
+│   ├── weather_tool.py       │   ├── time_tool.py
 │   ├── file_reader.py        │   ├── weather_tool.py
 │   ├── file_writer.py        │   ├── file_reader.py
 │   ├── web_search.py         │   ├── file_writer.py
 │   ├── web_reader.py         │   ├── web_search.py
 │   ├── shell_tool.py         │   ├── web_reader.py
-│   └── python_runner.py      │   ├── shell_tool.py
-├── workspace/                │   ├── python_runner.py
-    └── (Agent 的文件)        │   └── memory_tool.py  🆕
-                              └── workspace/
-                                  ├── memory.json     🆕
+│   ├── python_runner.py      │   ├── shell_tool.py
+│   └── memory_tool.py        │   ├── python_runner.py
+└── workspace/                │   └── memory_tool.py
+    ├── memory.json           └── workspace/
+    └── (Agent 的文件)            ├── conversations/    🆕
+                                  │   ├── sessions.json
+                                  │   └── <id>.json
+                                  ├── memory.json
                                   └── (Agent 的文件)
 ```
 
@@ -158,6 +207,7 @@ MyAgent/                      MyAgent/
 | V3 | 2 | calculator, get_current_time |
 | V4 | 8 | get_current_time, get_weather, read_file, write_file, web_search, read_webpage, run_command, run_python |
 | V5 | 11 | V4的8个 + save_memory, list_memories, delete_memory |
+| V6 | 11 | 同 V5（工具无变化，增强会话管理 + 对话压缩） |
 
 ---
 
@@ -176,3 +226,5 @@ MyAgent/                      MyAgent/
 | **跨会话记忆** | JSON 文件 + system prompt 注入 | V5 |
 | **XML 容错** | 流式拦截 + 正则提取 + 自动执行 | V5 |
 | **安全** | `.env` 存密钥，`.gitignore` 防泄露 | V1 |
+| **多会话** | 独立文件存档 + manifest 清单 + 按需加载 | V6 |
+| **对话压缩** | LLM 摘要旧消息 + 保留最近 N 条原文 | V6 |
