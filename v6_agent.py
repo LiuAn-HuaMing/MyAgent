@@ -95,10 +95,79 @@ def _serialize_tool_calls(tool_calls) -> list | None:
     return result
 
 def save_current_session(session_id: str, title: str, messages: list) -> None:
-    """保存当前会话到独立文件"""
+    """保存当前会话到独立文件（长对话自动压缩旧消息）"""
     path = _session_path(session_id)
+
+    # 提取 user+assistant 消息（跳过 system prompt 和 tool 消息）
+    conversation_msgs = [m for m in messages[1:] if m["role"] in ("user", "assistant")]
+
+    # 判断是否需要压缩
+    compress_config = config.get("compression", {})
+    max_msgs = compress_config.get("max_messages", 30)
+    keep_recent = compress_config.get("keep_recent", 12)
+
+    summary = None
+    if compress_config.get("enabled", True) and len(conversation_msgs) > max_msgs:
+        # 从后往前数 keep_recent 条 user/assistant，找到分界点
+        count = 0
+        split_idx = len(messages)  # 默认全保留
+        for i in range(len(messages) - 1, 0, -1):
+            if messages[i]["role"] in ("user", "assistant"):
+                count += 1
+                if count >= keep_recent:
+                    split_idx = i
+                    break
+
+        old_msgs = [m for m in messages[1:split_idx] if m["role"] in ("user", "assistant")]
+        summary = _summarize_messages(old_msgs)
+        if summary:
+            save_data = {"summary": summary, "messages": []}
+            for m in messages[split_idx:]:
+                item = {"role": m["role"], "content": m.get("content")}
+                if m.get("tool_calls"):
+                    item["tool_calls"] = _serialize_tool_calls(m["tool_calls"])
+                if m.get("tool_call_id"):
+                    item["tool_call_id"] = m["tool_call_id"]
+                if m.get("reasoning_content"):
+                    item["reasoning_content"] = m["reasoning_content"]
+                save_data["messages"].append(item)
+            user_count = len(conversation_msgs)
+            print(f"📦 对话已压缩: {len(old_msgs)} 条消息 → {len(summary)} 字摘要")
+        else:
+            save_data = _build_save_data(messages)
+            user_count = len(conversation_msgs)
+    else:
+        save_data = _build_save_data(messages)
+        user_count = len(conversation_msgs)
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+    # 更新 manifest
+    manifest = _load_manifest()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    summary_suffix = " 📦" if summary else ""
+    for s in manifest:
+        if s["id"] == session_id:
+            s["title"] = title
+            s["messages"] = f"{user_count // 2} 轮{summary_suffix}"
+            s["updated_at"] = now
+            break
+    else:
+        manifest.append({
+            "id": session_id,
+            "title": title,
+            "messages": f"{user_count // 2} 轮{summary_suffix}",
+            "created_at": now,
+            "updated_at": now,
+        })
+    _save_manifest(manifest)
+
+
+def _build_save_data(messages: list) -> list:
+    """构建完整的保存数据（无压缩）"""
     save_data = []
-    for msg in messages[1:]:  # 跳过 messages[0]（system prompt）
+    for msg in messages[1:]:
         item = {"role": msg["role"], "content": msg.get("content")}
         if msg.get("tool_calls"):
             item["tool_calls"] = _serialize_tool_calls(msg["tool_calls"])
@@ -107,40 +176,62 @@ def save_current_session(session_id: str, title: str, messages: list) -> None:
         if msg.get("reasoning_content"):
             item["reasoning_content"] = msg["reasoning_content"]
         save_data.append(item)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(save_data, f, ensure_ascii=False, indent=2)
+    return save_data
 
-    # 更新 manifest
-    manifest = _load_manifest()
-    user_count = sum(1 for m in messages if m["role"] == "user")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    for s in manifest:
-        if s["id"] == session_id:
-            s["title"] = title
-            s["messages"] = f"{user_count} 轮"
-            s["updated_at"] = now
-            break
-    else:
-        manifest.append({
-            "id": session_id,
-            "title": title,
-            "messages": f"{user_count} 轮",
-            "created_at": now,
-            "updated_at": now,
-        })
-    _save_manifest(manifest)
 
-def load_session_messages(session_id: str) -> list:
-    """加载指定会话的消息（不含 system prompt）"""
+def _summarize_messages(messages: list) -> str | None:
+    """用 LLM 总结旧对话，保留关键信息"""
+    try:
+        # 构建纯文本对话
+        lines = []
+        for m in messages:
+            role = "用户" if m["role"] == "user" else "助手"
+            content = (m.get("content") or "").strip()
+            if content:
+                lines.append(f"{role}: {content}")
+        conversation_text = "\n".join(lines)
+
+        summary_prompt = f"""请总结以下对话的关键内容，要求：
+1. 保留所有重要的决策、结论、代码片段、文件路径、配置信息
+2. 保留用户的需求、偏好和背景信息
+3. 压缩到 500 字以内
+4. 用中文
+
+对话内容：
+{conversation_text}
+
+摘要："""
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": summary_prompt}],
+            stream=False,
+            extra_body={"thinking": {"type": "enabled"}},
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"⚠️ 对话摘要生成失败: {e}")
+        return None
+
+
+def load_session_messages(session_id: str) -> tuple[str | None, list]:
+    """加载指定会话，返回 (摘要, 消息列表)"""
     path = _session_path(session_id)
     if not os.path.exists(path):
-        return []
+        return None, []
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if isinstance(data, dict):
+            summary = data.get("summary")
+            messages = data.get("messages", [])
+            return summary, messages
+        else:
+            # 旧格式：纯列表
+            return None, data
     except (json.JSONDecodeError, Exception):
         print("⚠️ 会话存档损坏")
-        return []
+        return None, []
 
 def delete_session_file(session_id: str) -> None:
     """删除指定会话"""
@@ -284,7 +375,7 @@ while True:
                 print("格式: /load <会话ID>\n先用 /sessions 查看可用会话")
                 continue
             target_id = parts[1].strip()
-            target_msgs = load_session_messages(target_id)
+            summary, target_msgs = load_session_messages(target_id)
             if not target_msgs:
                 print(f"❌ 会话 {target_id} 不存在或为空")
                 continue
@@ -300,7 +391,12 @@ while True:
                     break
             current_session_id = target_id
             current_session_title = title
-            messages = [{"role": "system", "content": system_prompt}] + target_msgs
+            messages = [{"role": "system", "content": system_prompt}]
+            # 如果有摘要，注入到 system prompt
+            if summary:
+                messages[0]["content"] += f"\n\n【历史对话摘要】\n{summary}\n---请基于以上摘要继续对话，不要重复已完成的工作。---"
+                print(f"📦 已加载历史摘要 ({len(summary)} 字)")
+            messages.extend(target_msgs)
             round_num = sum(1 for m in target_msgs if m["role"] == "user") + 1
             print(f"✅ 已加载会话: {target_id}（{title}），{round_num - 1} 轮对话")
             continue

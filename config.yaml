@@ -25,3 +25,9 @@ workspace_dir: "C:/Programming/MyAgent/workspace"
 # 比如你的桌面、文档文件夹等，根据需要添加
 allowed_paths:
   - "C:/Users/shen0/Desktop"
+
+# 对话压缩：长对话自动总结旧消息，节省 tokens
+compression:
+  enabled: true          # 是否启用压缩
+  max_messages: 30       # 用户+助手消息超过此数量时触发压缩
+  keep_recent: 12        # 保留最近 N 条消息不压缩
