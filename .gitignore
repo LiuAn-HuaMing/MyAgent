@@ -13,6 +13,5 @@ __pycache__/
 Thumbs.db
 .DS_Store
 
-# Agent 运行时数据
-workspace/conversations/
-workspace/memory.json
+# Agent 运行时数据（整个 workspace 目录）
+workspace/

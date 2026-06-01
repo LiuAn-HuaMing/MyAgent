@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>MyAgent 工具调用架构</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+    body {
+        background: #fff;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        padding: 20px;
+    }
+    .container {
+        width: 1300px;
+    }
+    h2 {
+        text-align: center;
+        color: #1A56DB;
+        font-family: "Microsoft YaHei", sans-serif;
+        margin-bottom: 30px;
+        font-size: 24px;
+    }
+</style>
+</head>
+<body>
+<div class="container">
+<h2>MyAgent V6 — 完整系统架构图</h2>
+<div class="mermaid">
+flowchart TB
+    subgraph USER["👤 用户"]
+        INPUT["输入消息"]
+    end
+
+    subgraph AGENT["🤖 Agent 主循环 (v6_agent.py)"]
+        direction TB
+        
+        subgraph STARTUP["🚀 启动初始化"]
+            direction LR
+            LOAD_MEM["加载 memory.json"]
+            INJECT["注入 system prompt"]
+            INIT_SESS["初始化 sessions 目录"]
+            NEW_ID["生成新会话 ID"]
+        end
+
+        CMD{"是系统命令?"}
+        
+        subgraph CMD_HANDLER["⌨️ 命令处理器"]
+            direction LR
+            CMD_SESS["会话命令<br/>/sessions /load /delete<br/>/new /title /clearall"]
+            CMD_MEM["记忆命令<br/>/remember /forget<br/>/memories"]
+            CMD_OTHER["其他命令<br/>/help /exit /save<br/>/clear /history"]
+        end
+
+        PARSE["追加到 messages 列表"]
+
+        subgraph TOOL_LOOP["🔄 工具调用循环 (while True)"]
+            direction TB
+            API["调用 DeepSeek API<br/>messages + TOOL_DESCRIPTIONS"]
+            CHECK{"msg.tool_calls?"}
+            EXEC["🔧 执行工具函数<br/>TOOL_FUNCTIONS[name](**args)"]
+            APPEND["追加 assistant + tool 消息"]
+        end
+
+        subgraph OUTPUT["📤 输出 + 容错"]
+            direction TB
+            STREAM["流式输出回答"]
+            XML_CHECK{"检测到 XML 工具标签?"}
+            XML_HANDLE["正则提取 → 伪装标准格式<br/>→ processing_tools=True"]
+            SAVE_MSG["回答加入 messages<br/>round_num += 1"]
+        end
+
+        subgraph COMPRESS["📦 对话压缩 (退出/保存时触发)"]
+            direction TB
+            COUNT{"user+assistant 消息<br/>超过 30 条?"}
+            SPLIT["倒序查找分界点<br/>保留最近 12 条原文"]
+            SUMMARIZE["LLM 生成摘要<br/>(≤500 字中文)"]
+            PACK["存档格式:<br/>{summary, messages}"]
+        end
+    end
+
+    subgraph TOOLS["🛠️ 工具层 (tools/)"]
+        direction LR
+        CFG["config.yaml<br/>工具开关"]
+        REG["__init__.py<br/>注册中心<br/>ALL_TOOLS → TOOL_FUNCTIONS + TOOL_DESCRIPTIONS"]
+        T_ALL["11 个工具<br/>时间·天气·文件读写<br/>网页搜索·命令行<br/>Python执行·记忆管理"]
+    end
+
+    subgraph LLM["☁️ DeepSeek API"]
+        MODEL["deepseek-v4-pro<br/>推理模式"]
+    end
+
+    subgraph STORAGE["💾 持久化存储 (workspace/)"]
+        direction TB
+        MEM["memory.json<br/>键值对记忆"]
+        subgraph SESS_DIR["conversations/"]
+            MANIFEST["sessions.json<br/>会话清单"]
+            FILES["session_1.json<br/>session_2.json<br/>..."]
+        end
+    end
+
+    %% ===== 启动流程 =====
+    STORAGE -->|"读取记忆"| LOAD_MEM
+    LOAD_MEM --> INJECT
+    STORAGE -->|"读取清单"| INIT_SESS
+    INIT_SESS --> NEW_ID
+    NEW_ID --> INPUT
+
+    %% ===== 主循环 =====
+    INPUT --> CMD
+    CMD -->|"是"| CMD_HANDLER
+    CMD -->|"否"| PARSE
+
+    %% 命令处理 → 存储
+    CMD_SESS -->|"/load 读取"| FILES
+    CMD_SESS -->|"/delete 删除"| FILES
+    CMD_SESS -->|"更新清单"| MANIFEST
+    CMD_MEM -->|"增删记忆"| MEM
+    CMD_OTHER -->|"/save /exit"| COMPRESS
+    CMD_HANDLER --> INPUT
+
+    %% ===== 工具调用循环 =====
+    PARSE --> API
+    API <-->|"HTTP"| MODEL
+    MODEL --> CHECK
+    CHECK -->|"是"| EXEC
+    EXEC --> APPEND
+    APPEND --> API
+    CHECK -->|"否"| STREAM
+
+    %% ===== 输出与容错 =====
+    STREAM --> XML_CHECK
+    XML_CHECK -->|"是 (XML幻觉)"| XML_HANDLE
+    XML_HANDLE --> API
+    XML_CHECK -->|"否"| SAVE_MSG
+    SAVE_MSG --> INPUT
+
+    %% ===== 压缩流程 =====
+    COMPRESS --> COUNT
+    COUNT -->|"是"| SPLIT
+    SPLIT --> SUMMARIZE
+    SUMMARIZE -->|"调用 LLM"| MODEL
+    SUMMARIZE --> PACK
+    COUNT -->|"否"| PACK
+    PACK -->|"写入文件"| FILES
+    PACK -->|"更新清单"| MANIFEST
+
+    %% ===== 工具注册 =====
+    CFG -->|"过滤"| REG
+    REG -->|"函数字典"| EXEC
+    REG -->|"Schema列表"| API
+    T_ALL --> REG
+
+    %% ===== 记忆注入 =====
+    MEM -->|"启动时注入<br/>system prompt"| INJECT
+    INJECT --> PARSE
+
+    %% ===== 会话恢复 =====
+    FILES -->|"/load 恢复<br/>摘要注入 prompt"| PARSE
+
+    %% ===== 样式 =====
+    style USER fill:#E8F4FD,stroke:#1A56DB,stroke-width:2px
+    style AGENT fill:#FFF8E1,stroke:#F59E0B,stroke-width:2px
+    style STARTUP fill:#E0F2FE,stroke:#0284C7,stroke-width:1px
+    style TOOL_LOOP fill:#F0FFF0,stroke:#10B981,stroke-width:1px
+    style OUTPUT fill:#FFF0F0,stroke:#EF4444,stroke-width:1px
+    style COMPRESS fill:#FEF3C7,stroke:#D97706,stroke-width:1px
+    style CMD_HANDLER fill:#F3E8FF,stroke:#8B5CF6,stroke-width:1px
+    style TOOLS fill:#F3E8FF,stroke:#8B5CF6,stroke-width:2px
+    style LLM fill:#E0F2FE,stroke:#0EA5E9,stroke-width:2px
+    style STORAGE fill:#FEF3C7,stroke:#D97706,stroke-width:2px
+    style SESS_DIR fill:#FDE68A,stroke:#B45309,stroke-width:1px
+
+    style API fill:#DBEAFE,stroke:#3B82F6
+    style CHECK fill:#FEF9C3,stroke:#EAB308
+    style EXEC fill:#D1FAE5,stroke:#10B981
+    style XML_CHECK fill:#FEE2E2,stroke:#EF4444
+    style XML_HANDLE fill:#FEE2E2,stroke:#EF4444
+    style COUNT fill:#FDE68A,stroke:#D97706
+    style SUMMARIZE fill:#FDE68A,stroke:#D97706
+</div>
+</div>
+<script>mermaid.initialize({startOnLoad:true, theme:'default', securityLevel:'loose'});</script>
+</body>
+</html>
